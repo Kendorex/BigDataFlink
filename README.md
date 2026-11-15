@@ -1,3 +1,38 @@
+# Лабораторная №3 — потоковая обработка на Apache Flink
+
+## Запуск
+
+```powershell
+docker compose up -d --build
+docker compose logs -f producer
+```
+
+[Flink UI](http://localhost:8081).
+
+PostgreSQL: `localhost:5435`, база `lab_db`, пользователь и пароль `postgres`.
+
+## Проверка
+
+```powershell
+docker compose run --rm --no-deps producer python -u verify.py
+```
+
+В PostgreSQL:
+
+```sql
+SELECT count(*) AS sales, sum(sale_quantity) AS units,
+       sum(sale_total_price) AS revenue
+FROM fact_sales;
+```
+
+Ожидается: `10000 | 54623 | 2529852.12`.
+
+Повторная отправка данных без создания дублей:
+
+```powershell
+docker compose run --rm --no-deps producer
+```
+
 # BigDataFlink
 Анализ больших данных - лабораторная работа №3 - Streaming processing с помощью Flink
 

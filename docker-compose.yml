@@ -1,0 +1,120 @@
+name: bigdata-flink-lab3
+
+x-flink: &flink
+  image: bigdata-flink-lab3-flink
+  environment:
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    KAFKA_TOPIC: sales
+    PG_URL: jdbc:postgresql://postgres:5432/lab_db
+    PG_USER: postgres
+    PG_PASSWORD: postgres
+    FLINK_PROPERTIES: |
+      jobmanager.rpc.address: jobmanager
+      taskmanager.numberOfTaskSlots: 2
+      parallelism.default: 2
+      jobmanager.memory.process.size: 1024m
+      taskmanager.memory.process.size: 1536m
+      state.checkpoints.dir: file:///opt/flink/checkpoints
+      execution.checkpointing.interval: 10s
+      execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+  volumes:
+    - flink_checkpoints:/opt/flink/checkpoints
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: lab_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/postgres:/docker-entrypoint-initdb.d:ro
+      - ./sql/checks:/checks:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d lab_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  kafka-init:
+    image: apache/kafka:3.9.1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/opt/kafka/bin/kafka-topics.sh"]
+    command: ["--bootstrap-server", "kafka:9092", "--create", "--if-not-exists", "--topic", "sales", "--partitions", "2", "--replication-factor", "1"]
+
+  jobmanager:
+    <<: *flink
+    build: ./flink
+    command: ["standalone-job", "--job-classname", "lab.StarJob"]
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
+  taskmanager:
+    <<: *flink
+    pull_policy: never
+    command: ["taskmanager"]
+    depends_on:
+      jobmanager:
+        condition: service_started
+
+  producer:
+    image: bigdata-flink-lab3-producer
+    build: ./producer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: sales
+      SEND_INTERVAL: "0.005"
+      PG_HOST: postgres
+      PG_DATABASE: lab_db
+      PG_USER: postgres
+      PG_PASSWORD: postgres
+    volumes:
+      - ./data:/data:ro
+      - ./producer:/app:ro
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      taskmanager:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  kafka_data:
+  flink_checkpoints:
